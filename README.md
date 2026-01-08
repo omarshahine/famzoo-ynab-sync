@@ -78,6 +78,10 @@ YNAB_ACCOUNT_ID=your_account_id
 # For FamZoo transfers like "Transfer from Family for Child:"
 # Set this to your Checking account ID so transfers are properly linked
 YNAB_TRANSFER_ACCOUNT_ID=your_checking_account_id
+
+# Personal Payee Mappings (optional - JSON format)
+# Add your local merchants to normalize payee names in YNAB
+# PAYEE_MAPPINGS={"LOCAL COFFEE": "My Coffee Shop", "JOES PIZZA": "Joe's Pizza"}
 ```
 
 ## Finding Your FamZoo Account Name

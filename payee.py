@@ -186,9 +186,13 @@ def normalize_payee(description: str) -> str:
     name = re.sub(r'\s*-\s*[A-Z]$', '', name, flags=re.IGNORECASE).strip()
 
     # Check for known mappings (sort by pattern length descending for more specific matches first)
+    # Also handles truncated names where FamZoo cuts off the description (e.g., "MADISON PARK PHA")
     name_upper_clean = name.upper().strip()
     for pattern, clean_name in sorted(PAYEE_MAPPINGS.items(), key=lambda x: len(x[0]), reverse=True):
-        if pattern.upper() in name_upper_clean or name_upper_clean.startswith(pattern.upper()):
+        pattern_upper = pattern.upper()
+        if (pattern_upper in name_upper_clean or
+            name_upper_clean.startswith(pattern_upper) or
+            (len(name_upper_clean) >= 10 and pattern_upper.startswith(name_upper_clean))):
             return clean_name
 
     # Clean up multiple spaces

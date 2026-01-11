@@ -3,6 +3,7 @@
 import re
 import json
 import time
+import hashlib
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
@@ -350,9 +351,10 @@ class FamZooScraper:
         if "Starting Balance" in description:
             return None
 
-        # Generate unique transaction ID
+        # Generate unique transaction ID using deterministic hash
         hash_input = f"{date_str}{description}{amount}"
-        transaction_id = f"{date.strftime('%Y%m%d')}_{abs(hash(hash_input)) % 10000000000}"
+        hash_digest = hashlib.md5(hash_input.encode()).hexdigest()[:10]
+        transaction_id = f"{date.strftime('%Y%m%d')}_{hash_digest}"
 
         return FamZooTransaction(
             date=date,

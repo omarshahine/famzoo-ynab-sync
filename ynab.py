@@ -141,13 +141,13 @@ class YNABClient:
 
         # Handle transfers differently
         if is_transfer_tx and self.transfer_account_id:
-            # For transfers, use payee_id which points to the transfer account
-            # YNAB expects the payee_id to be "transfer:account_id" format
+            # For transfers, use payee_name - YNAB will auto-match to transfer payee
+            # Using payee_id requires a valid UUID, not account reference
             return YNABTransaction(
                 account_id=self.account_id,
                 date=famzoo_tx.date.strftime("%Y-%m-%d"),
                 amount=amount_milliunits,
-                payee_id=f"transfer:{self.transfer_account_id}",
+                payee_name="Transfer: Checking",  # YNAB auto-creates transfer payee
                 memo=memo[:200],
                 import_id=import_id,
             )

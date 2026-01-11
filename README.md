@@ -193,41 +193,102 @@ Reset the sync tracking state (will re-sync all transactions on next run).
 
 ### macOS - Using launchd (Recommended)
 
-Create a launchd plist to run the sync automatically:
+The repository includes a launchd plist file (`com.famzoo-ynab-sync.plist`) that runs the sync automatically every day.
 
-1. Create the plist file:
+#### Installation
+
+1. **Update paths in the plist** (if needed):
+
+   Edit `com.famzoo-ynab-sync.plist` and update the paths to match your installation:
+   ```xml
+   <key>ProgramArguments</key>
+   <array>
+       <string>/Users/YOUR_USERNAME/GitHub/famzoo-ynab-sync/famzoo-sync.sh</string>
+       <string>sync</string>
+   </array>
+
+   <key>WorkingDirectory</key>
+   <string>/Users/YOUR_USERNAME/GitHub/famzoo-ynab-sync</string>
+
+   <key>StandardOutPath</key>
+   <string>/Users/YOUR_USERNAME/GitHub/famzoo-ynab-sync/logs/sync.log</string>
+   ```
+
+2. **Create the logs directory**:
+   ```bash
+   mkdir -p ~/GitHub/famzoo-ynab-sync/logs
+   ```
+
+3. **Copy and load the service**:
+   ```bash
+   cp com.famzoo-ynab-sync.plist ~/Library/LaunchAgents/
+   launchctl load ~/Library/LaunchAgents/com.famzoo-ynab-sync.plist
+   ```
+
+#### Managing the Service
 
 ```bash
-mkdir -p ~/Library/LaunchAgents
+# View logs
+tail -f ~/GitHub/famzoo-ynab-sync/logs/sync.log
+
+# Run the sync manually (outside schedule)
+launchctl start com.famzoo-ynab-sync
+
+# Stop/disable the service
+launchctl unload ~/Library/LaunchAgents/com.famzoo-ynab-sync.plist
+
+# Re-enable the service (after making changes)
+launchctl load ~/Library/LaunchAgents/com.famzoo-ynab-sync.plist
+
+# Check if service is loaded
+launchctl list | grep famzoo
 ```
 
-2. Copy the included plist:
+#### Changing the Schedule
 
-```bash
-cp com.famzoo-ynab-sync.plist ~/Library/LaunchAgents/
+Edit the `StartCalendarInterval` section in the plist file:
+
+```xml
+<key>StartCalendarInterval</key>
+<dict>
+    <key>Hour</key>
+    <integer>8</integer>    <!-- Hour (0-23) -->
+    <key>Minute</key>
+    <integer>0</integer>    <!-- Minute (0-59) -->
+</dict>
 ```
 
-3. Edit the plist to set your correct paths:
+**Examples:**
+- Run at 8:00 AM daily: `Hour=8, Minute=0`
+- Run at 6:30 PM daily: `Hour=18, Minute=30`
+- Run at noon: `Hour=12, Minute=0`
 
+After changing the schedule, reload the service:
 ```bash
-open ~/Library/LaunchAgents/com.famzoo-ynab-sync.plist
-```
-
-4. Load the agent:
-
-```bash
+launchctl unload ~/Library/LaunchAgents/com.famzoo-ynab-sync.plist
 launchctl load ~/Library/LaunchAgents/com.famzoo-ynab-sync.plist
 ```
 
-To unload:
-```bash
-launchctl unload ~/Library/LaunchAgents/com.famzoo-ynab-sync.plist
-```
+#### Troubleshooting launchd
 
-To run immediately:
-```bash
-launchctl start com.famzoo-ynab-sync
-```
+If the service isn't running:
+
+1. **Check if it's loaded**:
+   ```bash
+   launchctl list | grep famzoo
+   ```
+
+2. **Check for errors**:
+   ```bash
+   cat ~/GitHub/famzoo-ynab-sync/logs/sync.log
+   ```
+
+3. **Test manually first**:
+   ```bash
+   ./famzoo-sync.sh sync --dry-run
+   ```
+
+4. **Verify paths** in the plist file are absolute and correct
 
 ### macOS - Using Shortcuts
 
@@ -238,7 +299,7 @@ You can create a Shortcut that runs the shell script:
 3. Add "Run Shell Script" action
 4. Set the script to:
    ```bash
-   /Users/YOUR_USERNAME/famzoo-ynab-sync/famzoo-sync.sh sync
+   /Users/YOUR_USERNAME/GitHub/famzoo-ynab-sync/famzoo-sync.sh sync
    ```
 5. Save the shortcut
 6. You can then run it from Shortcuts, add it to your menu bar, or set up automation triggers
@@ -253,7 +314,7 @@ crontab -e
 
 Add this line (runs at 8 AM daily):
 ```
-0 8 * * * /Users/YOUR_USERNAME/famzoo-ynab-sync/famzoo-sync.sh sync >> /Users/YOUR_USERNAME/famzoo-ynab-sync/sync.log 2>&1
+0 8 * * * /Users/YOUR_USERNAME/GitHub/famzoo-ynab-sync/famzoo-sync.sh sync >> /Users/YOUR_USERNAME/GitHub/famzoo-ynab-sync/logs/sync.log 2>&1
 ```
 
 ## Payee Name Normalization

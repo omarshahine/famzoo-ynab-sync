@@ -92,38 +92,11 @@ class FamZooScraper:
             self._page.fill("#fzi_signin_memname", self.member_name)
             self._page.fill("#fzi_signin_password", self.password)
 
-            # Click sign in and wait for response
-            with self._page.expect_response(
-                lambda response: "wwv_flow" in response.url
-            ) as response_info:
-                self._page.click("#fzi_signin_bsignin")
+            # Click sign in and wait for navigation
+            self._page.click("#fzi_signin_bsignin")
 
-            response = response_info.value
-            response_body = response.text()
-
-            # Parse the JSON response
-            try:
-                result = json.loads(response_body)
-
-                # Check for errors
-                if result.get("fieldErrors"):
-                    errors = result["fieldErrors"]
-                    if errors:
-                        error_msg = errors[0].get("message", "Unknown error")
-                        raise Exception(f"Login failed: {error_msg}")
-
-                # Extract session ID from redirect URL
-                if "url" in result:
-                    redirect_url = result["url"]
-                    session_match = re.search(r":(\d{10,})", redirect_url)
-                    if session_match:
-                        self._session_id = session_match.group(1)
-
-            except json.JSONDecodeError:
-                pass
-
-            # Wait for page to load after login
-            time.sleep(1)
+            # Wait for login to complete
+            time.sleep(3)
             self._page.wait_for_load_state("networkidle")
 
             # Verify login by checking page title

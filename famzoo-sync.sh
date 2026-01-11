@@ -18,6 +18,12 @@ fi
 # Activate virtual environment and run the command
 source "$VENV_DIR/bin/activate"
 
+# Log timestamp for scheduled runs
+echo ""
+echo "========================================"
+echo "FamZoo Sync: $(date '+%Y-%m-%d %H:%M:%S')"
+echo "========================================"
+
 # Run the main script with all passed arguments
 python3 "$SCRIPT_DIR/main.py" "$@"
 

@@ -137,6 +137,13 @@ class FamZooScraper:
                 if session_match:
                     self._session_id = session_match.group(1)
 
+            # If still no session ID, extract from page content (links contain session)
+            if not self._session_id:
+                content = self._page.content()
+                session_matches = re.findall(r"p=197:\d+:(\d{10,})", content)
+                if session_matches:
+                    self._session_id = session_matches[0]
+
             return self._session_id is not None
 
         except Exception as e:
@@ -167,15 +174,15 @@ class FamZooScraper:
             self._page.wait_for_load_state("networkidle")
 
             # Select account from dropdown (partial match on account_name)
-            accounts_select = self._page.query_selector("#P17_ACCOUNT")
+            accounts_select = self._page.query_selector("#P17_ACCOUNTS")
             if accounts_select:
                 # Get all options and find one containing our account name
-                options = self._page.query_selector_all("#P17_ACCOUNT option")
+                options = self._page.query_selector_all("#P17_ACCOUNTS option")
                 for option in options:
                     option_text = option.inner_text()
                     if self.account_name.lower() in option_text.lower():
                         option_value = option.get_attribute("value")
-                        self._page.select_option("#P17_ACCOUNT", option_value)
+                        self._page.select_option("#P17_ACCOUNTS", option_value)
                         break
 
             # Set date range in the form (dismiss date picker popups with Escape)

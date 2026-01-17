@@ -23,7 +23,7 @@ A CLI tool that syncs transactions from FamZoo to YNAB (You Need A Budget).
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/famzoo-ynab-sync.git
+git clone https://github.com/omarshahine/famzoo-ynab-sync.git
 cd famzoo-ynab-sync
 ```
 
@@ -395,6 +395,17 @@ The tool tracks imported transactions using unique IDs. If you see duplicates:
 1. YNAB also has its own duplicate detection via `import_id`
 2. You can reset tracking with `./famzoo-sync.sh reset`
 3. Use `--since DATE` to limit which transactions are synced
+
+## Fixed Floor Date Filtering
+
+The tool uses a fixed floor date to ensure consistent transaction fetching and prevent duplicates:
+
+- **First run**: Fetches transactions from the last 90 days and saves this date as the floor
+- **Subsequent runs**: Always fetches from the same floor date (historical data doesn't change)
+- **--since flag**: Sets a specific floor date (only if not already set)
+- **--force flag**: Ignores the floor date and fetches all transactions
+
+The fixed floor ensures that every sync sees the same set of transactions, preventing duplicates that can occur with sliding date windows.
 
 ## Files
 

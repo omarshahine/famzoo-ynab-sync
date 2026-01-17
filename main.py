@@ -6,7 +6,7 @@ Syncs transactions from FamZoo to YNAB automatically.
 """
 
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import click
@@ -87,17 +87,32 @@ def sync(ctx, dry_run, max_pages, force, since):
 
         print_status("Successfully logged in to FamZoo!", "success")
 
-        # Parse --since date if provided
+        # Determine start date for fetching transactions
+        # Use a fixed floor date to ensure we always see the same transactions
         since_date = None
         if since:
+            # User explicitly provided --since date
             try:
                 since_date = parse_date(since)
-                print_status(f"Fetching transactions since {since_date.strftime('%Y-%m-%d')}...", "info")
+                print_status(f"Fetching transactions since {since_date.strftime('%Y-%m-%d')} (--since flag)...", "info")
+                # Set this as the floor date if not already set
+                tracker.set_first_sync_date(since_date)
             except ValueError as e:
                 print_status(str(e), "error")
                 sys.exit(1)
+        elif not force:
+            # Use fixed floor date from state (not a rolling window)
+            floor_date = tracker.get_first_sync_date()
+            if floor_date:
+                since_date = floor_date
+                print_status(f"Fetching transactions since {since_date.strftime('%Y-%m-%d')} (fixed floor date)...", "info")
+            else:
+                # First sync - default to 90 days ago and save as floor
+                since_date = datetime.now() - timedelta(days=90)
+                tracker.set_first_sync_date(since_date)
+                print_status(f"Fetching transactions since {since_date.strftime('%Y-%m-%d')} (first sync, setting floor)...", "info")
         else:
-            print_status(f"Fetching transactions (max {max_pages} pages)...", "info")
+            print_status(f"Fetching all transactions (--force flag)...", "info")
 
         # Fetch transactions with date filter applied at source
         transactions = famzoo.get_transactions(max_pages=max_pages, start_date=since_date)

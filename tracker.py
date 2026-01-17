@@ -17,6 +17,7 @@ class SyncState:
     last_transaction_date: str  # Date of most recent transaction
     imported_transaction_ids: list[str]  # List of imported transaction IDs
     total_imported: int
+    first_sync_date: str = ""  # Fixed floor date for fetching (ISO format date)
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
@@ -30,6 +31,7 @@ class SyncState:
             last_transaction_date=data.get("last_transaction_date", ""),
             imported_transaction_ids=data.get("imported_transaction_ids", []),
             total_imported=data.get("total_imported", 0),
+            first_sync_date=data.get("first_sync_date", ""),
         )
 
     @classmethod
@@ -114,6 +116,30 @@ class TransactionTracker:
             "total_imported": self.state.total_imported,
             "tracked_ids": len(self.state.imported_transaction_ids),
         }
+
+    def get_last_transaction_date(self) -> Optional[datetime]:
+        """Get the date of the most recent imported transaction."""
+        if not self.state.last_transaction_date:
+            return None
+        try:
+            return datetime.fromisoformat(self.state.last_transaction_date)
+        except ValueError:
+            return None
+
+    def get_first_sync_date(self) -> Optional[datetime]:
+        """Get the fixed floor date for fetching transactions."""
+        if not self.state.first_sync_date:
+            return None
+        try:
+            return datetime.fromisoformat(self.state.first_sync_date)
+        except ValueError:
+            return None
+
+    def set_first_sync_date(self, date: datetime):
+        """Set the fixed floor date for fetching transactions (only if not already set)."""
+        if not self.state.first_sync_date:
+            self.state.first_sync_date = date.strftime("%Y-%m-%d")
+            self._save_state()
 
     def reset(self):
         """Reset tracking state."""

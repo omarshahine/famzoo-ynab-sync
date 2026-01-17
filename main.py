@@ -5,6 +5,10 @@ FamZoo to YNAB Transaction Sync CLI
 Syncs transactions from FamZoo to YNAB automatically.
 """
 
+import warnings
+# Suppress urllib3 warning about LibreSSL on macOS
+warnings.filterwarnings("ignore", message="urllib3 v2 only supports OpenSSL")
+
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path

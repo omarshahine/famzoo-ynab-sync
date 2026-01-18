@@ -1,9 +1,11 @@
 """FamZoo web scraper for transaction data using Playwright."""
 
+import csv
+import os
 import re
-import json
 import time
 import hashlib
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
@@ -131,10 +133,10 @@ class FamZooScraper:
         end_date: Optional[datetime] = None,
     ) -> list[FamZooTransaction]:
         """
-        Fetch transactions from FamZoo using the date filter form.
+        Fetch transactions from FamZoo by downloading CSV export.
 
         Args:
-            max_pages: Maximum pages to fetch (for backwards compatibility, not used with form)
+            max_pages: Not used (kept for backwards compatibility)
             start_date: Only fetch transactions on or after this date
             end_date: Only fetch transactions on or before this date (defaults to today)
         """
@@ -150,7 +152,6 @@ class FamZooScraper:
             # Select account from dropdown (partial match on account_name)
             accounts_select = self._page.query_selector("#P17_ACCOUNTS")
             if accounts_select:
-                # Get all options and find one containing our account name
                 options = self._page.query_selector_all("#P17_ACCOUNTS option")
                 for option in options:
                     option_text = option.inner_text()
@@ -159,179 +160,132 @@ class FamZooScraper:
                         self._page.select_option("#P17_ACCOUNTS", option_value)
                         break
 
-            # Set date range in the form (dismiss date picker popups with Escape)
+            # Set date range in the form
             if start_date:
                 start_str = start_date.strftime("%m/%d/%Y")
                 self._page.fill("#P17_START_DATE_input", start_str)
-                self._page.keyboard.press("Escape")  # Close date picker
+                self._page.keyboard.press("Escape")
 
             if end_date:
                 end_str = end_date.strftime("%m/%d/%Y")
             else:
                 end_str = datetime.now().strftime("%m/%d/%Y")
             self._page.fill("#P17_END_DATE_input", end_str)
-            self._page.keyboard.press("Escape")  # Close date picker
+            self._page.keyboard.press("Escape")
 
-            # Set rows to maximum to get all transactions in one request
+            # Set rows to maximum
             rows_select = self._page.query_selector("#P17_ROWS")
             if rows_select:
-                # Try to set to highest value available
                 self._page.select_option("#P17_ROWS", "1000")
 
-            # Click GO to apply filters (button with class fzbutton)
+            # Click GO to apply filters
             go_button = self._page.query_selector("button.fzbutton:has-text('GO'), a[href*='P17_GO']")
             if go_button:
                 go_button.click()
                 self._page.wait_for_load_state("networkidle")
                 time.sleep(1)
 
-            # Parse all transactions from the filtered results
-            all_transactions = self._parse_transactions_page()
-
-            # If there's still pagination, fetch additional pages
-            page_ranges = self._get_page_ranges()
-            if page_ranges and len(page_ranges) > 1:
-                # Sort by start number descending to get newest first
-                page_ranges.sort(key=lambda x: x[0], reverse=True)
-                pages_fetched = 1
-
-                for start, end, link_text in page_ranges[1:]:  # Skip first (already fetched)
-                    if pages_fetched >= max_pages:
-                        break
-
-                    link = self._page.query_selector(f".pagination a:has-text('{link_text}')")
-                    if link:
-                        link.click()
-                        self._page.wait_for_load_state("networkidle")
-                        time.sleep(0.5)
-                        transactions = self._parse_transactions_page()
-                        all_transactions.extend(transactions)
-                        pages_fetched += 1
-
-            return all_transactions
+            # Download CSV using the actions menu
+            transactions = self._download_and_parse_csv()
+            return transactions
 
         except Exception as e:
             raise e
         finally:
             self._stop_browser()
 
-    def _get_page_ranges(self) -> list[tuple[int, int, str]]:
-        """Get all available page ranges from pagination links."""
-        page_ranges = []
-        pagination_links = self._page.query_selector_all(".pagination a")
+    def _download_and_parse_csv(self) -> list[FamZooTransaction]:
+        """Click 'Download Spreadsheet' link and parse the results."""
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as tmp:
+            tmp_path = tmp.name
 
-        for link in pagination_links:
-            link_text = link.inner_text().strip()
-            # Parse ranges like "1-100", "101-200", etc.
-            match = re.match(r"(\d+)-(\d+)", link_text)
-            if match:
-                start = int(match.group(1))
-                end = int(match.group(2))
-                page_ranges.append((start, end, link_text))
+        # Set up download handler and click the Download Spreadsheet link
+        with self._page.expect_download(timeout=30000) as download_info:
+            download_link = self._page.query_selector("a:has-text('Download Spreadsheet')")
+            if download_link:
+                download_link.click()
+            else:
+                raise Exception("Could not find 'Download Spreadsheet' link")
 
-        return page_ranges
+        download = download_info.value
+        download.save_as(tmp_path)
 
-    def _parse_transactions_page(self) -> list[FamZooTransaction]:
-        """Parse transaction data from the current page."""
-        transactions = []
-        seen_ids = set()  # Deduplicate by transaction_id
+        # Parse the downloaded file
+        transactions = self._parse_csv_file(tmp_path)
 
-        # Get all table rows
-        rows = self._page.query_selector_all("tr")
-
-        for row in rows:
-            text = row.inner_text()
-
-            # Look for rows with date patterns (MM/DD/YYYY)
-            date_match = re.search(r"(\d{2}/\d{2}/\d{4})", text)
-            if not date_match:
-                continue
-
-            # Parse the row data
-            try:
-                transaction = self._parse_transaction_row(text)
-                if transaction and transaction.transaction_id not in seen_ids:
-                    transactions.append(transaction)
-                    seen_ids.add(transaction.transaction_id)
-            except Exception:
-                continue
+        # Clean up temp file
+        os.unlink(tmp_path)
 
         return transactions
 
-    def _parse_transaction_row(self, row_text: str) -> Optional[FamZooTransaction]:
-        """Parse a single transaction row."""
-        # Split by tabs or multiple spaces
-        parts = re.split(r"\t+|\n+", row_text)
-        parts = [p.strip() for p in parts if p.strip()]
+    def _parse_csv_file(self, csv_path: str) -> list[FamZooTransaction]:
+        """Parse transactions from a CSV file."""
+        transactions = []
+        seen_ids = set()
 
-        if len(parts) < 3:
-            return None
+        with open(csv_path, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
 
-        # Find date (MM/DD/YYYY format, possibly with time)
-        date_str = None
-        date_idx = None
-        for i, part in enumerate(parts):
-            date_match = re.match(r"(\d{2}/\d{2}/\d{4})", part)
-            if date_match:
-                date_str = date_match.group(1)
-                date_idx = i
-                break
-
-        if not date_str or date_idx is None:
-            return None
-
-        # Parse date
-        try:
-            date = datetime.strptime(date_str, "%m/%d/%Y")
-        except ValueError:
-            return None
-
-        # Find amount (last part with $ sign)
-        amount = None
-        amount_str = None
-        for part in reversed(parts):
-            amount_match = re.search(r"[\-]?\$?([\d,]+\.?\d*)", part)
-            if amount_match and "$" in part:
-                amount_str = part
+            for row in reader:
                 try:
-                    amount_value = amount_match.group(1).replace(",", "")
-                    amount = float(amount_value)
-                    # Check for negative
-                    if "-" in part:
-                        amount = -abs(amount)
+                    transaction = self._parse_csv_row(row)
+                    if transaction and transaction.transaction_id not in seen_ids:
+                        transactions.append(transaction)
+                        seen_ids.add(transaction.transaction_id)
+                except Exception:
+                    continue
+
+        return transactions
+
+    def _parse_csv_row(self, row: dict) -> Optional[FamZooTransaction]:
+        """Parse a single CSV row into a transaction."""
+        # FamZoo CSV columns: Transaction Date, Description, Memo, Amount
+        date_str = row.get('Transaction Date', '').strip()
+        description = row.get('Description', '').strip()
+        memo = row.get('Memo', '').strip()
+        amount_str = row.get('Amount', '').strip()
+
+        if not date_str or not amount_str:
+            return None
+
+        # Parse date - FamZoo format: "MM/DD/YYYY HH:MM:SS AM/PM"
+        try:
+            # Try with time first, then without
+            for fmt in ["%m/%d/%Y %I:%M:%S %p", "%m/%d/%Y %H:%M:%S", "%m/%d/%Y"]:
+                try:
+                    date = datetime.strptime(date_str, fmt)
                     break
                 except ValueError:
                     continue
-
-        if amount is None:
+            else:
+                return None
+        except Exception:
             return None
 
-        # Skip zero-amount transactions (like pending authorizations)
+        # Parse amount - FamZoo format: "$X.XX" or "-$X.XX" or just "X.XX"
+        try:
+            clean_amount = re.sub(r'[,$]', '', amount_str)
+            amount = float(clean_amount)
+        except ValueError:
+            return None
+
+        # Skip zero amounts (pending transactions)
         if amount == 0:
             return None
-
-        # Description is typically after the date
-        description = ""
-        memo = ""
-        if date_idx + 1 < len(parts):
-            description = parts[date_idx + 1]
-
-        # Memo might be next
-        if date_idx + 2 < len(parts) and parts[date_idx + 2] != amount_str:
-            memo = parts[date_idx + 2]
 
         # Skip "Starting Balance" entries
         if "Starting Balance" in description:
             return None
 
-        # Generate unique transaction ID using deterministic hash
-        hash_input = f"{date_str}{description}{amount}"
+        # Generate unique transaction ID using date (without time) + description + amount
+        date_only = date.strftime("%m/%d/%Y")
+        hash_input = f"{date_only}{description}{amount}"
         hash_digest = hashlib.md5(hash_input.encode()).hexdigest()[:10]
         transaction_id = f"{date.strftime('%Y%m%d')}_{hash_digest}"
 
         return FamZooTransaction(
             date=date,
-            description=description[:100],  # Limit description length
+            description=description[:100],
             amount=amount,
             memo=memo[:100] if memo else "",
             transaction_id=transaction_id,

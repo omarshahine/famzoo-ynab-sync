@@ -307,6 +307,70 @@ def reset():
 
 
 @cli.command()
+@click.pass_context
+def skip(ctx):
+    """Mark all new transactions as imported without syncing to YNAB.
+
+    Use this to skip transactions you don't want to import.
+    """
+    try:
+        config = Config.from_env(ctx.obj["env_file"])
+        tracker = TransactionTracker()
+
+        print_status("Connecting to FamZoo...", "info")
+        famzoo = FamZooScraper(
+            family_name=config.famzoo_family_name,
+            member_name=config.famzoo_member_name,
+            password=config.famzoo_password,
+            account_name=config.famzoo_account_name,
+        )
+
+        print_status("Logging in to FamZoo...", "info")
+        if not famzoo.login():
+            print_status("Failed to log in to FamZoo.", "error")
+            sys.exit(1)
+
+        # Use the fixed floor date
+        since_date = tracker.get_first_sync_date()
+        if since_date:
+            print_status(f"Fetching transactions since {since_date.strftime('%Y-%m-%d')}...", "info")
+
+        transactions = famzoo.get_transactions(start_date=since_date)
+
+        if not transactions:
+            print_status("No transactions found.", "warning")
+            return
+
+        new_transactions = tracker.filter_new_transactions(transactions)
+
+        if not new_transactions:
+            print_status("No new transactions to skip.", "success")
+            return
+
+        click.echo(f"\nTransactions to skip ({len(new_transactions)}):")
+        click.echo("-" * 80)
+        for tx in new_transactions:
+            amount_str = f"${tx.amount:,.2f}" if tx.amount >= 0 else f"-${abs(tx.amount):,.2f}"
+            if is_transfer(tx.description):
+                payee_display = "[TRANSFER]"
+            else:
+                payee_display = normalize_payee(tx.description)[:35]
+            click.echo(f"  {tx.date.strftime('%Y-%m-%d')} | {amount_str:>12} | {payee_display}")
+            click.echo(f"    ID: {tx.transaction_id}")
+        click.echo("-" * 80)
+
+        if click.confirm(f"\nMark these {len(new_transactions)} transactions as imported (skip them)?"):
+            tracker.mark_imported(new_transactions)
+            print_status(f"Marked {len(new_transactions)} transactions as imported.", "success")
+        else:
+            print_status("Cancelled.", "warning")
+
+    except Exception as e:
+        print_status(f"Error: {e}", "error")
+        sys.exit(1)
+
+
+@cli.command()
 @click.option("--max-pages", default=3, help="Maximum number of transaction pages to fetch")
 @click.pass_context
 def test_famzoo(ctx, max_pages):

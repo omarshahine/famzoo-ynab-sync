@@ -22,7 +22,8 @@ def get_keychain_secret(name: str) -> str | None:
             text=True,
             check=True
         )
-        return result.stdout.strip()
+        # Only strip trailing newline, preserve any intentional whitespace in password
+        return result.stdout.rstrip('\n')
     except subprocess.CalledProcessError:
         return None
 

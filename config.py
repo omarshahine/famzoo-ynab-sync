@@ -4,6 +4,7 @@ import os
 from dataclasses import dataclass
 from typing import Optional
 from dotenv import load_dotenv
+from keychain import load_famzoo_credentials
 
 
 @dataclass
@@ -21,7 +22,11 @@ class Config:
 
     @classmethod
     def from_env(cls, env_path: str = ".env") -> "Config":
-        """Load configuration from .env file and environment variables."""
+        """Load configuration from macOS Keychain and .env file."""
+        # First load secrets from Keychain
+        load_famzoo_credentials()
+
+        # Then load remaining config from .env (non-secrets)
         load_dotenv(env_path)
 
         required_vars = [

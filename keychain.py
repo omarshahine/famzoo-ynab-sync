@@ -2,9 +2,10 @@
 
 import subprocess
 import os
+from typing import Optional
 
 
-def get_keychain_secret(name: str) -> str | None:
+def get_keychain_secret(name: str) -> Optional[str]:
     """
     Get a secret from macOS Keychain.
 
@@ -39,7 +40,7 @@ def load_famzoo_credentials() -> None:
     """
     credentials = [
         ("FAMZOO_PASSWORD", "FAMZOO_PASSWORD"),
-        ("YNAB_API_TOKEN", "FAMZOO_YNAB_API_TOKEN"),  # Different keychain key to avoid collision
+        ("YNAB_API_TOKEN", "YNAB_API_TOKEN"),
     ]
 
     for env_var, keychain_key in credentials:

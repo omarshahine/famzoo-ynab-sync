@@ -25,7 +25,8 @@ echo "FamZoo Sync: $(date '+%Y-%m-%d %H:%M:%S')"
 echo "========================================"
 
 # Run the main script with all passed arguments, capturing output
-OUTPUT=$(python3 "$SCRIPT_DIR/main.py" "$@" 2>&1)
+# NO_COLOR prevents Click from emitting ANSI escape codes when piped
+OUTPUT=$(NO_COLOR=1 python3 "$SCRIPT_DIR/main.py" "$@" 2>&1)
 EXIT_CODE=$?
 
 # Print output to log as usual
@@ -37,8 +38,10 @@ if shortcuts list 2>/dev/null | grep -q "^${SHORTCUT_NAME}$"; then
     if [ "$EXIT_CODE" -eq 0 ]; then
         # Extract the result message from output
         CREATED=$(echo "$OUTPUT" | grep -o 'Created [0-9]* new transactions' || true)
+        DUPES=$(echo "$OUTPUT" | grep -o 'Skipped [0-9]* duplicate transactions' || true)
         if [ -n "$CREATED" ]; then
             NOTIFY_MSG="FamZoo Sync: $CREATED"
+            [ -n "$DUPES" ] && NOTIFY_MSG="$NOTIFY_MSG, $DUPES"
         elif echo "$OUTPUT" | grep -q 'No new transactions to sync'; then
             NOTIFY_MSG="FamZoo Sync: No new transactions"
         elif echo "$OUTPUT" | grep -q 'No transactions found'; then

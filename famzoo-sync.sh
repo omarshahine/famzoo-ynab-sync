@@ -24,11 +24,39 @@ echo "========================================"
 echo "FamZoo Sync: $(date '+%Y-%m-%d %H:%M:%S')"
 echo "========================================"
 
-# Run the main script with all passed arguments
-python3 "$SCRIPT_DIR/main.py" "$@"
-
-# Capture exit code
+# Run the main script with all passed arguments, capturing output
+OUTPUT=$(python3 "$SCRIPT_DIR/main.py" "$@" 2>&1)
 EXIT_CODE=$?
+
+# Print output to log as usual
+echo "$OUTPUT"
+
+# Send notification via macOS Shortcuts (if installed)
+SHORTCUT_NAME="FamZoo Notification"
+if shortcuts list 2>/dev/null | grep -q "^${SHORTCUT_NAME}$"; then
+    if [ "$EXIT_CODE" -eq 0 ]; then
+        # Extract the result message from output
+        CREATED=$(echo "$OUTPUT" | grep -o 'Created [0-9]* new transactions' || true)
+        if [ -n "$CREATED" ]; then
+            NOTIFY_MSG="FamZoo Sync: $CREATED"
+        elif echo "$OUTPUT" | grep -q 'No new transactions to sync'; then
+            NOTIFY_MSG="FamZoo Sync: No new transactions"
+        elif echo "$OUTPUT" | grep -q 'No transactions found'; then
+            NOTIFY_MSG="FamZoo Sync: No transactions found"
+        else
+            NOTIFY_MSG="FamZoo Sync: Completed successfully"
+        fi
+    else
+        # Extract error message
+        ERROR_MSG=$(echo "$OUTPUT" | grep '\[ERROR\]' | tail -1 | sed 's/\[ERROR\] //')
+        NOTIFY_MSG="FamZoo Sync Error: ${ERROR_MSG:-Sync failed with exit code $EXIT_CODE}"
+    fi
+
+    echo "$NOTIFY_MSG" | shortcuts run "$SHORTCUT_NAME" 2>/dev/null || true
+else
+    echo "WARNING: macOS Shortcut '$SHORTCUT_NAME' not installed."
+    echo "Install it by running: open \"$SCRIPT_DIR/FamZoo Notification.shortcut\""
+fi
 
 # Deactivate virtual environment
 deactivate 2>/dev/null

@@ -407,6 +407,28 @@ The tool uses a fixed floor date to ensure consistent transaction fetching and p
 
 The fixed floor ensures that every sync sees the same set of transactions, preventing duplicates that can occur with sliding date windows.
 
+## Notifications
+
+After each sync, `famzoo-sync.sh` sends a notification via the macOS Shortcuts app with a summary of what happened:
+
+| Scenario | Notification |
+|----------|-------------|
+| Transactions synced | `FamZoo Sync: Created N new transactions` |
+| Nothing new | `FamZoo Sync: No new transactions` |
+| Error | `FamZoo Sync Error: <details>` |
+
+### Setup
+
+The notification requires a macOS Shortcut called "FamZoo Notification". The Shortcut file is included in the repo.
+
+To install it:
+
+```bash
+open "FamZoo Notification.shortcut"
+```
+
+This opens the Shortcuts app and prompts you to add it. If the Shortcut is not installed, the sync script will print a warning with the install command.
+
 ## Files
 
 - `main.py` - Main CLI application
@@ -415,7 +437,9 @@ The fixed floor ensures that every sync sees the same set of transactions, preve
 - `tracker.py` - Transaction tracking to prevent duplicates
 - `config.py` - Configuration management
 - `payee.py` - Payee name normalization (customize merchant name mappings here)
-- `famzoo-sync.sh` - Shell wrapper for easy execution
+- `keychain.py` - macOS Keychain utilities for secret loading
+- `famzoo-sync.sh` - Shell wrapper for easy execution and notifications
+- `FamZoo Notification.shortcut` - macOS Shortcut for sync notifications
 - `.famzoo_sync_state.json` - Sync state (auto-generated)
 
 ## License

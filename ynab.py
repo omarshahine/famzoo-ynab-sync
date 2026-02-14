@@ -21,7 +21,7 @@ class YNABTransaction:
     payee_name: Optional[str] = None
     payee_id: Optional[str] = None  # For transfers, this is the target account ID
     memo: Optional[str] = None
-    cleared: str = "cleared"
+    cleared: str = "uncleared"
     approved: bool = True
     import_id: Optional[str] = None
 

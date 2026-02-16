@@ -68,3 +68,11 @@ The Shortcut file (`FamZoo Notification.shortcut`) is checked into the repo. To 
 - The `.env` file is gitignored; use `.env.example` as a template
 - Virtual environments (`venv/`, `.venv/`) are gitignored
 - Playwright requires `playwright install chromium` after fresh venv setup
+## Claude Code GitHub Actions
+
+This repo uses Claude Code GitHub Actions for PR automation:
+
+- **`claude-code-review.yml`** - Auto-reviews PRs when marked "Ready for review" (draft → ready triggers review)
+- **`claude.yml`** - Responds to `@claude` mentions in PR/issue comments for manual reviews
+
+**Workflow:** Open PRs as draft → push commits → mark "Ready for review" to trigger auto-review. Use `@claude` in comments for follow-up reviews.

@@ -55,6 +55,13 @@ After each sync, `famzoo-sync.sh` sends a message to the "FamZoo Notification" S
 
 The Shortcut file (`FamZoo Notification.shortcut`) is checked into the repo. To install on a new Mac: double-click to import into Shortcuts app.
 
+## Code Hygiene
+
+- No hardcoded user paths (`/Users/[name]/`) - use `~/` or `${HOME}`
+- No personal email addresses in tracked files (allowed: `@example.com`, `@anthropic.com`, `@noreply`)
+- No API keys or secrets in code - use environment variables or macOS Keychain
+- No phone numbers or PII in examples - use generic placeholders
+
 ## Development Notes
 
 - Do not modify `.famzoo_sync_state.json` manually - use `reset` or `skip` commands

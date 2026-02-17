@@ -1,5 +1,31 @@
 # FamZoo to YNAB Sync
 
+## Quick Commands
+
+```bash
+# Activate venv
+source venv/bin/activate
+
+# Run sync manually
+python main.py sync
+
+# Check sync status
+python main.py status
+
+# List YNAB budgets/accounts (for config)
+python main.py list-budgets
+python main.py list-accounts
+
+# Test FamZoo connection
+python main.py test-famzoo
+
+# Reset sync state (re-sync from floor date)
+python main.py reset
+
+# Install Playwright browser (after fresh venv)
+playwright install chromium
+```
+
 ## Project Overview
 
 CLI tool that syncs transactions from FamZoo prepaid cards to YNAB (You Need A Budget). Runs daily via macOS launchd at 8 AM.
@@ -61,6 +87,28 @@ The Shortcut file (`FamZoo Notification.shortcut`) is checked into the repo. To 
 - No personal email addresses in tracked files (allowed: `@example.com`, `@anthropic.com`, `@noreply`)
 - No API keys or secrets in code - use environment variables or macOS Keychain
 - No phone numbers or PII in examples - use generic placeholders
+
+## Development Setup
+
+```bash
+# Create virtual environment
+python3 -m venv venv
+source venv/bin/activate
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Install Playwright browser
+playwright install chromium
+
+# Copy and fill in config
+cp .env.example .env
+# Edit .env with YNAB budget/account IDs (non-secret config)
+
+# Store secrets in macOS Keychain
+security add-generic-password -s 'env/FAMZOO_PASSWORD' -a "$USER" -w 'YOUR_PASSWORD'
+security add-generic-password -s 'env/YNAB_API_TOKEN' -a "$USER" -w 'YOUR_TOKEN'
+```
 
 ## Development Notes
 

@@ -15,6 +15,15 @@ if [ ! -d "$VENV_DIR" ]; then
     exit 1
 fi
 
+# Load secrets from ~/.secrets.env
+if [ -f "$HOME/.secrets.env" ]; then
+    source "$HOME/.secrets.env"
+    # Map YNAB token to the name the app expects
+    export YNAB_API_TOKEN="${YNAB_API_KEY:-$YNAB_API_TOKEN}"
+else
+    echo "WARNING: ~/.secrets.env not found. Secrets must be set in environment."
+fi
+
 # Activate virtual environment and run the command
 source "$VENV_DIR/bin/activate"
 

@@ -4,7 +4,6 @@ import os
 from dataclasses import dataclass
 from typing import Optional
 from dotenv import load_dotenv
-from keychain import load_famzoo_credentials
 
 
 @dataclass
@@ -22,11 +21,13 @@ class Config:
 
     @classmethod
     def from_env(cls, env_path: str = ".env") -> "Config":
-        """Load configuration from macOS Keychain and .env file."""
-        # First load secrets from Keychain
-        load_famzoo_credentials()
+        """Load configuration from environment variables and .env file.
 
-        # Then load remaining config from .env (non-secrets)
+        Secrets (FAMZOO_PASSWORD, YNAB_API_TOKEN) are expected to be set in the
+        environment before this is called (sourced from ~/.secrets.env by the
+        shell wrapper). Non-secret config is loaded from the .env file.
+        """
+        # Load non-secret config from .env (secrets already in env via ~/.secrets.env)
         load_dotenv(env_path)
 
         required_vars = [

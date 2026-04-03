@@ -52,12 +52,12 @@ CLI tool that syncs transactions from FamZoo prepaid cards to YNAB (You Need A B
 
 ## Secrets
 
-Secrets are stored in macOS Keychain (not in `.env`):
+Secrets are stored in `~/.secrets.env` (sourced by `famzoo-sync.sh` before running Python):
 
-| Keychain Key | Env Var |
-|--------------|---------|
-| `env/FAMZOO_PASSWORD` | `FAMZOO_PASSWORD` |
-| `env/YNAB_API_TOKEN` | `YNAB_API_TOKEN` |
+| secrets.env Key | App Env Var |
+|-----------------|-------------|
+| `FAMZOO_PASSWORD` | `FAMZOO_PASSWORD` |
+| `YNAB_API_KEY` | `YNAB_API_TOKEN` (mapped by shell wrapper) |
 
 Non-secret config lives in `.env` (family name, member name, account name, budget/account IDs).
 
@@ -105,9 +105,10 @@ playwright install chromium
 cp .env.example .env
 # Edit .env with YNAB budget/account IDs (non-secret config)
 
-# Store secrets in macOS Keychain
-security add-generic-password -s 'env/FAMZOO_PASSWORD' -a "$USER" -w 'YOUR_PASSWORD'
-security add-generic-password -s 'env/YNAB_API_TOKEN' -a "$USER" -w 'YOUR_TOKEN'
+# Ensure secrets are in ~/.secrets.env
+# Required entries:
+#   export FAMZOO_PASSWORD="your_password"
+#   export YNAB_API_KEY="your_ynab_token"
 ```
 
 ## Development Notes

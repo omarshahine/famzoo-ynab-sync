@@ -97,12 +97,24 @@ class FamZooScraper:
             # Click sign in and wait for navigation
             self._page.click("#fzi_signin_bsignin")
 
-            # Wait for login to complete
+            # Wait for login to complete - APEX apps can do multi-step redirects,
+            # so we retry the title check if the execution context is destroyed
+            # mid-navigation.
             time.sleep(3)
             self._page.wait_for_load_state("networkidle")
 
-            # Verify login by checking page title
-            title = self._page.title()
+            # Verify login by checking page title (retry on navigation race)
+            for attempt in range(3):
+                try:
+                    self._page.wait_for_load_state("domcontentloaded")
+                    title = self._page.title()
+                    break
+                except Exception:
+                    if attempt == 2:
+                        raise
+                    time.sleep(2)
+                    self._page.wait_for_load_state("networkidle")
+
             if "Sign In" in title:
                 return False
 
@@ -146,7 +158,7 @@ class FamZooScraper:
         try:
             # Navigate to transactions page with current session
             tx_url = f"{self.BASE_URL}{self.TRANSACTIONS_PAGE}:{self._session_id}"
-            self._page.goto(tx_url)
+            self._page.goto(tx_url, wait_until="domcontentloaded")
             self._page.wait_for_load_state("networkidle")
 
             # Select account from dropdown (partial match on account_name)

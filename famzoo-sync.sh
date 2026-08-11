@@ -15,13 +15,20 @@ if [ ! -d "$VENV_DIR" ]; then
     exit 1
 fi
 
-# Load secrets from ~/.secrets.env
-if [ -f "$HOME/.secrets.env" ]; then
-    source "$HOME/.secrets.env"
-    # Map YNAB token to the name the app expects
-    export YNAB_API_TOKEN="${YNAB_API_KEY:-$YNAB_API_TOKEN}"
-else
-    echo "WARNING: ~/.secrets.env not found. Secrets must be set in environment."
+# Load secrets: machine-specific chezmoi file first, then legacy ~/.secrets.env
+SECRETS_LOADED=""
+for SECRETS_FILE in "$HOME/.secrets-macbook-pro.env" "$HOME/.secrets.env"; do
+    if [ -f "$SECRETS_FILE" ]; then
+        source "$SECRETS_FILE"
+        # Map YNAB token to the name the app expects
+        # (FAMZOO_YNAB_API_TOKEN in secrets is revoked/dead as of 2026-08-11 — use YNAB_API_KEY)
+        export YNAB_API_TOKEN="${YNAB_API_KEY:-$YNAB_API_TOKEN}"
+        SECRETS_LOADED="$SECRETS_FILE"
+        break
+    fi
+done
+if [ -z "$SECRETS_LOADED" ]; then
+    echo "WARNING: no secrets file found (~/.secrets-macbook-pro.env or ~/.secrets.env). Secrets must be set in environment."
 fi
 
 # Activate virtual environment and run the command

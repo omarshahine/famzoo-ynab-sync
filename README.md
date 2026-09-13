@@ -106,7 +106,7 @@ The tool does a partial match, so you just need enough of the name to uniquely i
 
 ### Multiple cards:
 
-To sync multiple family members' cards, run separate instances with different `.env` files, each with a different `FAMZOO_ACCOUNT_NAME`.
+To sync several family members' cards into the same YNAB account, separate the names with `;`, e.g. `FAMZOO_ACCOUNT_NAME=***1234;***5678`. Prefer the card's last four digits: FamZoo relabels a card's `(Owner)` when it's reassigned. Each name must match exactly one FamZoo account or the sync stops with the list of available accounts. Money moved between two listed cards (same-day, equal and opposite transfers) is skipped on both sides, since it nets to zero in YNAB; transfers from any other account still become transfers to `YNAB_TRANSFER_ACCOUNT_ID`.
 
 ## Usage
 

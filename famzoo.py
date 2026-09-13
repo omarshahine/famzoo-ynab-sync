@@ -21,6 +21,7 @@ class FamZooTransaction:
     amount: float  # Negative for debits, positive for credits
     memo: str
     transaction_id: str
+    account: str = ""  # FamZoo dropdown label of the card this came from
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
@@ -55,6 +56,7 @@ class FamZooScraper:
         self.member_name = member_name
         self.password = password
         self.account_name = account_name  # Name to match in Accounts dropdown
+        self.selected_account = ""  # Full dropdown label that account_name matched
         self._session_id: Optional[str] = None
         self._playwright = None
         self._browser: Optional[Browser] = None
@@ -161,16 +163,18 @@ class FamZooScraper:
             self._page.goto(tx_url, wait_until="domcontentloaded")
             self._page.wait_for_load_state("networkidle")
 
-            # Select account from dropdown (partial match on account_name)
-            accounts_select = self._page.query_selector("#P17_ACCOUNTS")
-            if accounts_select:
-                options = self._page.query_selector_all("#P17_ACCOUNTS option")
-                for option in options:
-                    option_text = option.inner_text()
-                    if self.account_name.lower() in option_text.lower():
-                        option_value = option.get_attribute("value")
-                        self._page.select_option("#P17_ACCOUNTS", option_value)
-                        break
+            # Select account from dropdown (partial match on account_name). A miss
+            # used to fall through to whatever the page defaulted to, so fail loudly.
+            options = self._page.query_selector_all("#P17_ACCOUNTS option")
+            labels = [o.inner_text().strip() for o in options]
+            matches = [(o, label) for o, label in zip(options, labels)
+                       if label and self.account_name.lower() in label.lower()]
+            if len(matches) != 1:
+                raise Exception(
+                    f"FAMZOO_ACCOUNT_NAME '{self.account_name}' matched {len(matches)} FamZoo accounts "
+                    f"(need exactly 1). Available: {[label for label in labels if label]}")
+            option, self.selected_account = matches[0]
+            self._page.select_option("#P17_ACCOUNTS", option.get_attribute("value"))
 
             # Set date range in the form
             if start_date:
@@ -199,12 +203,22 @@ class FamZooScraper:
 
             # Download CSV using the actions menu
             transactions = self._download_and_parse_csv()
+            for tx in transactions:
+                tx.account = self.selected_account
             return transactions
 
         except Exception as e:
             raise e
         finally:
             self._stop_browser()
+
+    def list_accounts(self) -> list[str]:
+        """Dropdown labels of every account this login can see."""
+        tx_url = f"{self.BASE_URL}{self.TRANSACTIONS_PAGE}:{self._session_id}"
+        self._page.goto(tx_url, wait_until="domcontentloaded")
+        self._page.wait_for_load_state("networkidle")
+        labels = [o.inner_text().strip() for o in self._page.query_selector_all("#P17_ACCOUNTS option")]
+        return [label for label in labels if label]
 
     def _download_and_parse_csv(self) -> list[FamZooTransaction]:
         """Click 'Download Spreadsheet' link and parse the results."""

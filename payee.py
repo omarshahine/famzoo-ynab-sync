@@ -231,6 +231,31 @@ def smart_title_case(text: str) -> str:
     return " ".join(result)
 
 
+def find_internal_transfers(transactions) -> set:
+    """IDs of transfers that moved money between two of the synced cards.
+
+    Such a move shows up on both cards the same day with opposite amounts
+    ("Transfer to ..." on one, "Transfer from ..." on the other). Both land in
+    the one YNAB account, so they net to zero and must not become transfers to
+    checking. Pairing on the two legs is used rather than the names in the
+    description, because FamZoo relabels a card when its owner changes.
+    """
+    legs = {}
+    for tx in transactions:
+        if is_transfer(tx.description):
+            legs.setdefault((tx.date.date(), round(abs(tx.amount), 2)), []).append(tx)
+    internal = set()
+    for group in legs.values():
+        outs = [t for t in group if t.amount < 0]
+        ins = [t for t in group if t.amount > 0]
+        for out in outs:
+            partner = next((t for t in ins if t.account != out.account), None)
+            if partner:
+                ins.remove(partner)
+                internal.update({out.transaction_id, partner.transaction_id})
+    return internal
+
+
 def parse_transfer_info(description: str) -> Tuple[bool, Optional[str]]:
     """
     Parse transfer information from description.

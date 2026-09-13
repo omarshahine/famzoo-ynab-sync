@@ -22,7 +22,10 @@ class YNABTransaction:
     payee_id: Optional[str] = None  # For transfers, this is the target account ID
     memo: Optional[str] = None
     cleared: str = "uncleared"
-    approved: bool = True
+    # Imported unapproved, like a bank feed, so ynab-auto-approve categorizes them.
+    # Created approved, a row YNAB couldn't categorize sat as approved-but-Uncategorized
+    # where no approval pass ever looks.
+    approved: bool = False
     import_id: Optional[str] = None
 
     def to_dict(self) -> dict:

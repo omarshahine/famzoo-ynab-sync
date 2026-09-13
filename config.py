@@ -19,6 +19,15 @@ class Config:
     ynab_account_id: str
     ynab_transfer_account_id: Optional[str] = None  # Account ID for transfers (e.g., Checking)
 
+    @property
+    def famzoo_account_names(self) -> list[str]:
+        """FAMZOO_ACCOUNT_NAME may list several cards separated by ';'.
+
+        All of them sync into the one YNAB account, so money moved between
+        them nets to zero there.
+        """
+        return [n.strip() for n in self.famzoo_account_name.split(";") if n.strip()]
+
     @classmethod
     def from_env(cls, env_path: str = ".env") -> "Config":
         """Load configuration from environment variables and .env file.

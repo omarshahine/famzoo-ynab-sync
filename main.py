@@ -19,7 +19,7 @@ from config import Config
 from famzoo import FamZooScraper, FamZooTransaction
 from ynab import YNABClient
 from tracker import TransactionTracker
-from payee import normalize_payee, is_transfer
+from payee import find_internal_transfers, normalize_payee, is_transfer
 
 
 def parse_date(date_str: str) -> datetime:
@@ -42,6 +42,44 @@ def print_status(message: str, status: str = "info"):
         "error": "red",
     }
     click.secho(f"[{status.upper()}] {message}", fg=colors.get(status, "white"))
+
+
+def fetch_transactions(config, since_date=None, max_pages=5):
+    """Log in once per configured card and merge their transactions.
+
+    Returns (transactions, synced_account_labels). Raises if a login fails or
+    an account name doesn't match exactly one FamZoo account.
+    """
+    merged, seen, labels = [], set(), []
+    for name in config.famzoo_account_names:
+        famzoo = FamZooScraper(
+            family_name=config.famzoo_family_name,
+            member_name=config.famzoo_member_name,
+            password=config.famzoo_password,
+            account_name=name,
+        )
+        if not famzoo.login():
+            raise Exception("Failed to log in to FamZoo. Check your credentials.")
+        txs = famzoo.get_transactions(max_pages=max_pages, start_date=since_date)
+        labels.append(famzoo.selected_account)
+        print_status(f"{famzoo.selected_account}: {len(txs)} transactions", "info")
+        last4 = "".join(ch for ch in famzoo.selected_account if ch.isdigit())[-4:]
+        for tx in txs:
+            # IDs hash date+description+amount, so the same purchase on two cards
+            # collides. The first card keeps the bare ID, preserving existing state.
+            if tx.transaction_id in seen:
+                tx.transaction_id = f"{tx.transaction_id}_{last4}"
+            seen.add(tx.transaction_id)
+            merged.append(tx)
+    return merged, labels
+
+
+def payee_display(tx, internal_ids):
+    if tx.transaction_id in internal_ids:
+        return "[BETWEEN CARDS]"
+    if is_transfer(tx.description):
+        return "[TRANSFER]"
+    return normalize_payee(tx.description)[:35]
 
 
 @click.group()
@@ -74,23 +112,6 @@ def sync(ctx, dry_run, max_pages, force, since):
             print_status(f"Last sync: {sync_info['last_sync']}", "info")
             print_status(f"Total previously imported: {sync_info['total_imported']}", "info")
 
-        # Initialize FamZoo scraper
-        print_status("Connecting to FamZoo...", "info")
-        famzoo = FamZooScraper(
-            family_name=config.famzoo_family_name,
-            member_name=config.famzoo_member_name,
-            password=config.famzoo_password,
-            account_name=config.famzoo_account_name,
-        )
-
-        # Log in to FamZoo
-        print_status("Logging in to FamZoo...", "info")
-        if not famzoo.login():
-            print_status("Failed to log in to FamZoo. Check your credentials.", "error")
-            sys.exit(1)
-
-        print_status("Successfully logged in to FamZoo!", "success")
-
         # Determine start date for fetching transactions
         # Use a fixed floor date to ensure we always see the same transactions
         since_date = None
@@ -119,7 +140,9 @@ def sync(ctx, dry_run, max_pages, force, since):
             print_status(f"Fetching all transactions (--force flag)...", "info")
 
         # Fetch transactions with date filter applied at source
-        transactions = famzoo.get_transactions(max_pages=max_pages, start_date=since_date)
+        print_status(f"Connecting to FamZoo ({len(config.famzoo_account_names)} account(s))...", "info")
+        transactions, _ = fetch_transactions(config, since_date, max_pages)
+        internal_ids = find_internal_transfers(transactions)
 
         if not transactions:
             print_status("No transactions found in FamZoo.", "warning")
@@ -132,7 +155,12 @@ def sync(ctx, dry_run, max_pages, force, since):
             new_transactions = transactions
             print_status("Force mode: syncing all transactions", "warning")
         else:
-            new_transactions = tracker.filter_new_transactions(transactions)
+            new_transactions, resettled = tracker.split_new_transactions(transactions)
+            if resettled:
+                print_status(f"Skipped {len(resettled)} charges re-described by FamZoo when they settled "
+                             "(already imported while pending)", "info")
+                if not dry_run:
+                    tracker.mark_imported(resettled, resettled=True)
 
         if not new_transactions:
             print_status("No new transactions to sync.", "success")
@@ -145,13 +173,12 @@ def sync(ctx, dry_run, max_pages, force, since):
         click.echo("-" * 80)
         for tx in new_transactions:
             amount_str = f"${tx.amount:,.2f}" if tx.amount >= 0 else f"-${abs(tx.amount):,.2f}"
-            # Show normalized payee name or [TRANSFER] marker
-            if is_transfer(tx.description):
-                payee_display = "[TRANSFER]"
-            else:
-                payee_display = normalize_payee(tx.description)[:35]
-            click.echo(f"  {tx.date.strftime('%Y-%m-%d')} | {amount_str:>12} | {payee_display}")
+            click.echo(f"  {tx.date.strftime('%Y-%m-%d')} | {amount_str:>12} | {payee_display(tx, internal_ids)}")
         click.echo("-" * 80)
+
+        # Moves between two synced cards stay inside the one YNAB account: skip both legs.
+        to_create = [tx for tx in new_transactions if tx.transaction_id not in internal_ids]
+        internal = len(new_transactions) - len(to_create)
 
         if dry_run:
             print_status("Dry run mode - no changes made", "warning")
@@ -175,7 +202,7 @@ def sync(ctx, dry_run, max_pages, force, since):
 
         # Sync transactions
         print_status("Syncing transactions to YNAB...", "info")
-        created, duplicates = ynab.sync_famzoo_transactions(new_transactions)
+        created, duplicates = ynab.sync_famzoo_transactions(to_create)
 
         # Update tracker
         tracker.mark_imported(new_transactions)
@@ -184,6 +211,8 @@ def sync(ctx, dry_run, max_pages, force, since):
         print_status(f"Created {created} new transactions in YNAB", "success")
         if duplicates:
             print_status(f"Skipped {duplicates} duplicate transactions", "info")
+        if internal:
+            print_status(f"Skipped {internal} transfers between synced cards", "info")
 
     except ValueError as e:
         print_status(str(e), "error")
@@ -204,7 +233,7 @@ def status(ctx):
         click.echo("\n=== Configuration ===")
         click.echo(f"FamZoo Family Name: {config.famzoo_family_name}")
         click.echo(f"FamZoo Member Name: {config.famzoo_member_name}")
-        click.echo(f"FamZoo Account: {config.famzoo_account_name}")
+        click.echo(f"FamZoo Accounts: {'; '.join(config.famzoo_account_names)}")
         click.echo(f"YNAB Budget ID: {config.ynab_budget_id}")
         click.echo(f"YNAB Account ID: {config.ynab_account_id}")
         click.echo(f"YNAB Transfer Account ID: {config.ynab_transfer_account_id or 'Not configured'}")
@@ -317,25 +346,14 @@ def skip(ctx):
         config = Config.from_env(ctx.obj["env_file"])
         tracker = TransactionTracker()
 
-        print_status("Connecting to FamZoo...", "info")
-        famzoo = FamZooScraper(
-            family_name=config.famzoo_family_name,
-            member_name=config.famzoo_member_name,
-            password=config.famzoo_password,
-            account_name=config.famzoo_account_name,
-        )
-
-        print_status("Logging in to FamZoo...", "info")
-        if not famzoo.login():
-            print_status("Failed to log in to FamZoo.", "error")
-            sys.exit(1)
-
         # Use the fixed floor date
         since_date = tracker.get_first_sync_date()
         if since_date:
             print_status(f"Fetching transactions since {since_date.strftime('%Y-%m-%d')}...", "info")
 
-        transactions = famzoo.get_transactions(start_date=since_date)
+        print_status("Connecting to FamZoo...", "info")
+        transactions, _ = fetch_transactions(config, since_date)
+        internal_ids = find_internal_transfers(transactions)
 
         if not transactions:
             print_status("No transactions found.", "warning")
@@ -351,11 +369,7 @@ def skip(ctx):
         click.echo("-" * 80)
         for tx in new_transactions:
             amount_str = f"${tx.amount:,.2f}" if tx.amount >= 0 else f"-${abs(tx.amount):,.2f}"
-            if is_transfer(tx.description):
-                payee_display = "[TRANSFER]"
-            else:
-                payee_display = normalize_payee(tx.description)[:35]
-            click.echo(f"  {tx.date.strftime('%Y-%m-%d')} | {amount_str:>12} | {payee_display}")
+            click.echo(f"  {tx.date.strftime('%Y-%m-%d')} | {amount_str:>12} | {payee_display(tx, internal_ids)}")
             click.echo(f"    ID: {tx.transaction_id}")
         click.echo("-" * 80)
 
@@ -378,34 +392,16 @@ def test_famzoo(ctx, max_pages):
     try:
         config = Config.from_env(ctx.obj["env_file"])
 
-        print_status("Connecting to FamZoo...", "info")
-        famzoo = FamZooScraper(
-            family_name=config.famzoo_family_name,
-            member_name=config.famzoo_member_name,
-            password=config.famzoo_password,
-            account_name=config.famzoo_account_name,
-        )
-
-        print_status("Logging in...", "info")
-        if not famzoo.login():
-            print_status("Login failed!", "error")
-            sys.exit(1)
-
-        print_status("Login successful!", "success")
-
-        print_status("Fetching transactions...", "info")
-        transactions = famzoo.get_transactions(max_pages=max_pages)
+        print_status("Connecting to FamZoo and fetching transactions...", "info")
+        transactions, _ = fetch_transactions(config, max_pages=max_pages)
+        internal_ids = find_internal_transfers(transactions)
 
         if transactions:
             click.echo(f"\n=== Found {len(transactions)} Transactions ===")
             click.echo("(Showing normalized payee names)")
             for tx in transactions[:10]:  # Show first 10
                 amount_str = f"${tx.amount:,.2f}" if tx.amount >= 0 else f"-${abs(tx.amount):,.2f}"
-                if is_transfer(tx.description):
-                    payee_display = "[TRANSFER]"
-                else:
-                    payee_display = normalize_payee(tx.description)[:35]
-                click.echo(f"  {tx.date.strftime('%Y-%m-%d')} | {amount_str:>12} | {payee_display}")
+                click.echo(f"  {tx.date.strftime('%Y-%m-%d')} | {amount_str:>12} | {payee_display(tx, internal_ids)}")
 
             if len(transactions) > 10:
                 click.echo(f"  ... and {len(transactions) - 10} more")

@@ -180,10 +180,6 @@ def sync(ctx, dry_run, max_pages, force, since):
         to_create = [tx for tx in new_transactions if tx.transaction_id not in internal_ids]
         internal = len(new_transactions) - len(to_create)
 
-        if dry_run:
-            print_status("Dry run mode - no changes made", "warning")
-            return
-
         # Initialize YNAB client
         print_status("Connecting to YNAB...", "info")
         ynab = YNABClient(
@@ -200,15 +196,27 @@ def sync(ctx, dry_run, max_pages, force, since):
 
         print_status("Successfully connected to YNAB!", "success")
 
+        if dry_run:
+            # Read-only: shows which transfers the bank feed already brought into YNAB.
+            plan = ynab.plan_sync(to_create) if to_create else None
+            for link in (plan.links if plan else []):
+                print_status(f"Would link {link.new.date} {link.new.amount / 1000:,.2f} transfer to the "
+                             f"existing YNAB transaction dated {link.existing['date']}", "info")
+            print_status(f"Would create {len(plan.to_create) if plan else 0} transactions", "info")
+            print_status("Dry run mode - no changes made", "warning")
+            return
+
         # Sync transactions
         print_status("Syncing transactions to YNAB...", "info")
-        created, duplicates = ynab.sync_famzoo_transactions(to_create)
+        created, duplicates, linked = ynab.sync_famzoo_transactions(to_create)
 
         # Update tracker
         tracker.mark_imported(new_transactions)
 
         # Report results
         print_status(f"Created {created} new transactions in YNAB", "success")
+        if linked:
+            print_status(f"Linked {linked} transfers already imported by the bank feed", "info")
         if duplicates:
             print_status(f"Skipped {duplicates} duplicate transactions", "info")
         if internal:

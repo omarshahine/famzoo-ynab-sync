@@ -22,6 +22,9 @@ python main.py test-famzoo
 # Reset sync state (re-sync from floor date)
 python main.py reset
 
+# Run unit tests (no network; never writes to YNAB)
+python -m unittest test_payee test_tracker test_ynab
+
 # Install Playwright browser (after fresh venv)
 playwright install chromium
 ```
@@ -66,6 +69,7 @@ Non-secret config lives in `.env` (family name, member name, account name, budge
 - **Fixed floor date**: First sync sets a floor date (default 90 days back). All subsequent syncs fetch from this same date to prevent duplicates from sliding windows.
 - **CSV download**: Transactions are fetched via FamZoo's CSV export (not HTML scraping) for reliability.
 - **Transfer detection**: FamZoo transfers (e.g., "Transfer from Family for Child:") are converted to proper YNAB transfers when `YNAB_TRANSFER_ACCOUNT_ID` is configured.
+- **Bank-feed-first transfers**: Before creating a transfer, `ynab.plan_transfer_links` looks for a transfer already in the FamZoo account (same transfer account, amount and sign, within 5 days, not tied to a FamZoo import). It claims that row (cleared, `[FZYN:...]` memo tag) instead of creating a duplicate pair. The memo tag stands in for `import_id`, which the API can't set on existing rows.
 - **Notification shortcut**: The `FamZoo Notification.shortcut` file is included in the repo. It must be installed in macOS Shortcuts app to receive sync notifications.
 
 ## Notification System

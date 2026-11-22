@@ -63,6 +63,7 @@ class YNABClient:
 
     def __init__(self, api_token: str, budget_id: str, account_id: str, transfer_account_id: Optional[str] = None):
         self.transfer_payee_id: Optional[str] = None  # resolved lazily from the transfer account
+        self.last_plan: Optional["SyncPlan"] = None
         self.api_token = api_token
         self.budget_id = budget_id
         self.account_id = account_id
@@ -221,7 +222,7 @@ class YNABClient:
         if not famzoo_transactions:
             return 0, 0, 0
 
-        plan = self.plan_sync(famzoo_transactions)
+        plan = self.last_plan = self.plan_sync(famzoo_transactions)
 
         # Claim the transfers the bank feed already imported instead of adding a second pair.
         self.update_transactions(plan.updates())
@@ -235,6 +236,7 @@ class YNABClient:
 
 
 IMPORT_PREFIX = "FZYN:"
+MEMO_LIMIT = 200  # the limit this sync already uses for memos it writes
 # How far apart the bank feed and FamZoo may date the same transfer (FamZoo posts a day or more later).
 MATCH_WINDOW_DAYS = 5
 
@@ -257,12 +259,23 @@ class TransferLink:
         if self.new.import_id in memo:
             return None  # linked on an earlier run
         tag = f"[{self.new.import_id}]"
-        base = memo or self.new.memo or ""
-        base = base[: 200 - len(tag) - 1].rstrip()
-        body = {"id": self.existing["id"], "memo": f"{base} {tag}".strip()}
+        body = {"id": self.existing["id"]}
+        if memo:
+            # Never shorten the user's own note; leave it untagged if the tag won't fit.
+            if len(memo) + 1 + len(tag) <= MEMO_LIMIT:
+                body["memo"] = f"{memo} {tag}"
+        else:
+            base = (self.new.memo or "")[: MEMO_LIMIT - len(tag) - 1].rstrip()
+            body["memo"] = f"{base} {tag}".strip()
         if self.existing.get("cleared") == "uncleared":
             body["cleared"] = "cleared"  # FamZoo has confirmed it; never downgrade a reconciled row
-        return body
+        return body if len(body) > 1 else None
+
+    @property
+    def untagged(self) -> bool:
+        """True when the memo is too full to hold the link tag (the row is still claimed)."""
+        memo = self.existing.get("memo") or ""
+        return bool(memo) and self.new.import_id not in memo and len(memo) + 2 + len(self.new.import_id) + 2 > MEMO_LIMIT
 
 
 @dataclass
@@ -290,8 +303,9 @@ def plan_transfer_links(
 
     A row qualifies when it is a live transfer with the same account, the same
     amount and sign, dated within MATCH_WINDOW_DAYS, and no FamZoo import is
-    tied to it yet. Each row is claimed at most once, closest date first, so
-    two equal transfers a few days apart pair up one to one.
+    tied to it yet. Each row is claimed at most once. The pairing links as
+    many transfers as possible and, among those pairings, keeps dates closest,
+    so equal transfers a few days apart never strand one another.
     """
     live = [e for e in existing if not e.get("deleted")]
     present_ids = {e.get("import_id") for e in live if e.get("import_id")}
@@ -308,24 +322,67 @@ def plan_transfer_links(
         else:
             pending.append(tx)
 
-    candidates = []
-    for tx in pending:
+    candidates = []  # (pending index, live index, day gap)
+    for i, tx in enumerate(pending):
         tx_date = date.fromisoformat(tx.date)
-        for e in live:
+        for j, e in enumerate(live):
             if (e.get("transfer_account_id") != transfer_account_id or e.get("amount") != tx.amount
                     or _is_famzoo_linked(e)):
                 continue
             gap = abs((date.fromisoformat(e["date"]) - tx_date).days)
             if gap <= MATCH_WINDOW_DAYS:
-                candidates.append((gap, tx.date, e["date"], id(tx), tx, e))
+                candidates.append((i, j, gap))
 
-    claimed = set()
-    for gap, _, _, key, tx, e in sorted(candidates, key=lambda c: c[:3]):
-        if key in linked or e["id"] in claimed:
-            continue
-        links.append(TransferLink(tx, e))
-        linked.add(key)
-        claimed.add(e["id"])
+    for i, j in _match(candidates):
+        links.append(TransferLink(pending[i], live[j]))
+        linked.add(id(pending[i]))
 
     to_create = [tx for tx in ynab_transactions if id(tx) not in linked]
     return SyncPlan(to_create=to_create, links=links)
+
+
+def _match(edges: list[tuple[int, int, int]]) -> list[tuple[int, int]]:
+    """Maximum matching of minimum total gap over (left, right, gap) edges.
+
+    Successive shortest augmenting paths: each round adds one pair along the
+    cheapest path, so the result links the most transfers and, among those
+    choices, the smallest total date gap. Inputs are a handful of rows.
+    """
+    adj: dict[int, list[tuple[int, int]]] = {}
+    for left, right, gap in edges:
+        adj.setdefault(left, []).append((right, gap))
+    match_left: dict[int, int] = {}
+    match_right: dict[int, int] = {}
+    cost = {(left, right): gap for left, right, gap in edges}
+    while True:
+        # Bellman-Ford from every free left node over the residual graph.
+        dist = {("L", left): 0 for left in adj if left not in match_left}
+        prev: dict = {}
+        changed = True
+        while changed:
+            changed = False
+            for (side, node), d in list(dist.items()):
+                if side == "L":
+                    steps = [(("R", r), d + g) for r, g in adj[node] if match_left.get(node) != r]
+                elif node in match_right:
+                    left = match_right[node]
+                    steps = [(("L", left), d - cost[(left, node)])]
+                else:
+                    steps = []
+                for target, nd in steps:
+                    if nd < dist.get(target, float("inf")):
+                        dist[target], prev[target] = nd, (side, node)
+                        changed = True
+        free = [(d, node) for (side, node), d in dist.items() if side == "R" and node not in match_right]
+        if not free:
+            break
+        _, right = min(free)
+        # Flip the path back to its free start: each R takes the L before it,
+        # and that L's old partner becomes the next R to reassign.
+        while True:
+            left = prev[("R", right)][1]
+            match_left[left], match_right[right] = right, left
+            if ("L", left) not in prev:
+                break
+            right = prev[("L", left)][1]
+    return sorted(match_left.items())

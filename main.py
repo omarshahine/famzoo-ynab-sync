@@ -202,6 +202,10 @@ def sync(ctx, dry_run, max_pages, force, since):
             for link in (plan.links if plan else []):
                 print_status(f"Would link {link.new.date} {link.new.amount / 1000:,.2f} transfer to the "
                              f"existing YNAB transaction dated {link.existing['date']}", "info")
+            for link in (plan.links if plan else []):
+                if link.untagged:
+                    print_status(f"Memo on the {link.existing['date']} transfer is too full for the link tag; "
+                                 "it would be claimed but left untagged", "warning")
             print_status(f"Would create {len(plan.to_create) if plan else 0} transactions", "info")
             print_status("Dry run mode - no changes made", "warning")
             return
@@ -217,6 +221,10 @@ def sync(ctx, dry_run, max_pages, force, since):
         print_status(f"Created {created} new transactions in YNAB", "success")
         if linked:
             print_status(f"Linked {linked} transfers already imported by the bank feed", "info")
+            for link in ynab.last_plan.links:
+                if link.untagged:
+                    print_status(f"Left the {link.existing['date']} transfer's memo as is (no room for "
+                                 f"{link.new.import_id}); add it by hand if this row could be re-claimed", "warning")
         if duplicates:
             print_status(f"Skipped {duplicates} duplicate transactions", "info")
         if internal:

@@ -112,6 +112,32 @@ class TransferLinkTests(unittest.TestCase):
         self.assertIn("FZYN:20261104:", by_row["b1"])
         self.assertIn("FZYN:20261107:", by_row["b2"])
 
+    def test_closest_first_would_strand_a_transfer_but_both_link(self):
+        # Greptile's case: closest-pair-first links 5->6 and leaves 10 with nothing in range.
+        client = FakeClient([existing("b1", 1, 500.0), existing("b6", 6, 500.0)])
+        self.assertEqual(client.sync_famzoo_transactions([fz(5, 500.0, DEPOSIT), fz(10, 500.0, DEPOSIT)]),
+                         (0, 0, 2))
+        by_row = {p["id"]: p["memo"] for p in client.patched}
+        self.assertIn("FZYN:20261105:", by_row["b1"])
+        self.assertIn("FZYN:20261110:", by_row["b6"])
+
+    def test_single_transfer_prefers_the_closest_row(self):
+        client = FakeClient([existing("far", 1, 500.0), existing("near", 5, 500.0)])
+        client.sync_famzoo_transactions([fz(5, 500.0, DEPOSIT)])
+        self.assertEqual([p["id"] for p in client.patched], ["near"])
+
+    def test_existing_memo_is_kept_whole(self):
+        client = FakeClient([existing("bank", 19, 2000.0, memo="Holiday money")])
+        client.sync_famzoo_transactions([fz(20, 2000.0, DEPOSIT)])
+        self.assertTrue(client.patched[0]["memo"].startswith("Holiday money [FZYN:20261120:"))
+
+    def test_full_memo_is_not_truncated(self):
+        note = "x" * 195
+        client = FakeClient([existing("bank", 19, 2000.0, memo=note, cleared="uncleared")])
+        self.assertEqual(client.sync_famzoo_transactions([fz(20, 2000.0, DEPOSIT)]), (0, 0, 1))
+        self.assertEqual(client.patched, [{"id": "bank", "cleared": "cleared"}])
+        self.assertTrue(client.last_plan.links[0].untagged)
+
     def test_second_transfer_without_bank_row_is_created_not_overmatched(self):
         client = FakeClient([existing("b1", 3, 500.0)])
         self.assertEqual(client.sync_famzoo_transactions([fz(4, 500.0, DEPOSIT), fz(6, 500.0, DEPOSIT)]),

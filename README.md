@@ -164,7 +164,7 @@ python main.py status
 Sync transactions from FamZoo to YNAB.
 
 Options:
-- `--dry-run`: Show what would be synced without making changes
+- `--dry-run`: Show what would be synced without making changes (reads YNAB to preview transfer links)
 - `--max-pages N`: Maximum number of transaction pages to fetch (default: 5)
 - `--force`: Sync all transactions, ignoring tracking state
 - `--since DATE`: Only sync transactions after this date (formats: YYYY-MM-DD, MM/DD/YYYY)
@@ -354,6 +354,10 @@ FamZoo transfers (like "Transfer from Family for Child:") are automatically conv
 3. Transfers will now appear in YNAB as proper transfers from Checking
 
 Without this setting, transfers will appear as regular transactions with the full FamZoo description as the payee.
+
+### Transfers the bank feed already imported
+
+If checking's bank feed imports a move before FamZoo reports it, YNAB already holds the transfer pair. FamZoo's own record (e.g. "Direct Deposit: SCHWAB BANK") then claims that existing FamZoo-side row instead of creating a second pair. A row is claimed when it is a transfer with `YNAB_TRANSFER_ACCOUNT_ID`, has the same amount and sign, is dated within 5 days, and isn't tied to a FamZoo import yet. Each row is claimed once. The pairing links as many transfers as it can, then prefers the closest dates. The sync marks the claimed row cleared (a reconciled row stays reconciled) and appends the FamZoo import ID to its memo, e.g. `[FZYN:20261120:...]`. An existing memo is never shortened: if the tag won't fit, the row is still claimed but left untagged, and the sync prints a warning. YNAB's API can't set `import_id` on an existing row, so the memo tag records the link and keeps re-runs from claiming it twice. `sync --dry-run` lists the rows it would claim without writing anything.
 
 ## Troubleshooting
 

@@ -1,7 +1,7 @@
 """YNAB API client for creating transactions."""
 
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import dataclass, field
+from datetime import date, timedelta
 from typing import Optional
 import hashlib
 
@@ -27,6 +27,8 @@ class YNABTransaction:
     # where no approval pass ever looks.
     approved: bool = False
     import_id: Optional[str] = None
+    # Not sent to YNAB: marks a FamZoo transfer to/from the configured transfer account.
+    is_transfer: bool = field(default=False, compare=False)
 
     def to_dict(self) -> dict:
         """Convert to YNAB API format."""
@@ -60,6 +62,8 @@ class YNABClient:
     BASE_URL = "https://api.ynab.com/v1"
 
     def __init__(self, api_token: str, budget_id: str, account_id: str, transfer_account_id: Optional[str] = None):
+        self.transfer_payee_id: Optional[str] = None  # resolved lazily from the transfer account
+        self.last_plan: Optional["SyncPlan"] = None
         self.api_token = api_token
         self.budget_id = budget_id
         self.account_id = account_id
@@ -78,6 +82,8 @@ class YNABClient:
             response = self.session.get(url)
         elif method == "POST":
             response = self.session.post(url, json=data)
+        elif method == "PATCH":
+            response = self.session.patch(url, json=data)
         else:
             raise ValueError(f"Unsupported method: {method}")
 
@@ -123,16 +129,39 @@ class YNABClient:
         response = self._make_request("POST", endpoint, data)
         return response.get("data", {})
 
+    def get_account_transactions(self, since: date) -> list[dict]:
+        """Transactions in the FamZoo YNAB account on or after `since` (read-only)."""
+        endpoint = f"/budgets/{self.budget_id}/accounts/{self.account_id}/transactions?since_date={since.isoformat()}"
+        response = self._make_request("GET", endpoint)
+        return response.get("data", {}).get("transactions", [])
+
+    def update_transactions(self, updates: list[dict]) -> dict:
+        """Patch existing transactions (each dict carries its `id`)."""
+        if not updates:
+            return {}
+        endpoint = f"/budgets/{self.budget_id}/transactions"
+        response = self._make_request("PATCH", endpoint, {"transactions": updates})
+        return response.get("data", {})
+
+    def resolve_transfer_payee(self) -> Optional[str]:
+        """The transfer payee of the configured transfer account, so transfers link by ID, not by name."""
+        if self.transfer_payee_id or not self.transfer_account_id:
+            return self.transfer_payee_id
+        for account in self.get_accounts():
+            if account.get("id") == self.transfer_account_id:
+                self.transfer_payee_id = account.get("transfer_payee_id")
+        return self.transfer_payee_id
+
     def famzoo_to_ynab(self, famzoo_tx: FamZooTransaction) -> YNABTransaction:
         """Convert a FamZoo transaction to YNAB format."""
         # YNAB uses milliunits (1000 = $1.00)
-        amount_milliunits = int(famzoo_tx.amount * 1000)
+        amount_milliunits = int(round(famzoo_tx.amount * 1000))
 
         # Create a unique import_id to prevent duplicates
         # Format: FZYN:date:hash (max 36 chars)
         hash_input = f"{famzoo_tx.date.isoformat()}{famzoo_tx.description}{famzoo_tx.amount}"
         tx_hash = hashlib.md5(hash_input.encode()).hexdigest()[:16]
-        import_id = f"FZYN:{famzoo_tx.date.strftime('%Y%m%d')}:{tx_hash}"
+        import_id = f"{IMPORT_PREFIX}{famzoo_tx.date.strftime('%Y%m%d')}:{tx_hash}"
 
         # Check if this is a transfer
         is_transfer_tx = is_transfer(famzoo_tx.description)
@@ -144,15 +173,17 @@ class YNABClient:
 
         # Handle transfers differently
         if is_transfer_tx and self.transfer_account_id:
-            # For transfers, use payee_name - YNAB will auto-match to transfer payee
-            # Using payee_id requires a valid UUID, not account reference
+            # Link by the transfer account's own payee when known. The name fallback
+            # relies on YNAB matching "Transfer: Checking" to the right account.
             return YNABTransaction(
                 account_id=self.account_id,
                 date=famzoo_tx.date.strftime("%Y-%m-%d"),
                 amount=amount_milliunits,
-                payee_name="Transfer: Checking",  # YNAB auto-creates transfer payee
+                payee_id=self.transfer_payee_id,
+                payee_name=None if self.transfer_payee_id else "Transfer: Checking",
                 memo=memo[:200],
                 import_id=import_id,
+                is_transfer=True,
             )
         else:
             # Normalize the payee name for regular transactions
@@ -167,27 +198,191 @@ class YNABClient:
                 import_id=import_id,
             )
 
+    def plan_sync(self, famzoo_transactions: list[FamZooTransaction]) -> "SyncPlan":
+        """Decide what to create and which transfers YNAB already has (read-only)."""
+        if self.transfer_account_id:
+            self.resolve_transfer_payee()
+        ynab_transactions = [self.famzoo_to_ynab(tx) for tx in famzoo_transactions]
+        transfers = [t for t in ynab_transactions if t.is_transfer]
+        if not transfers:
+            return SyncPlan(to_create=ynab_transactions)
+        earliest = min(date.fromisoformat(t.date) for t in transfers)
+        existing = self.get_account_transactions(earliest - timedelta(days=MATCH_WINDOW_DAYS))
+        return plan_transfer_links(ynab_transactions, existing, self.transfer_account_id)
+
     def sync_famzoo_transactions(
         self, famzoo_transactions: list[FamZooTransaction]
-    ) -> tuple[int, int]:
+    ) -> tuple[int, int, int]:
         """
         Sync FamZoo transactions to YNAB.
 
         Returns:
-            Tuple of (created_count, duplicate_count)
+            Tuple of (created_count, duplicate_count, linked_count)
         """
         if not famzoo_transactions:
-            return 0, 0
+            return 0, 0, 0
 
-        # Convert all transactions
-        ynab_transactions = [
-            self.famzoo_to_ynab(tx) for tx in famzoo_transactions
-        ]
+        plan = self.last_plan = self.plan_sync(famzoo_transactions)
 
-        # Create transactions in YNAB
-        result = self.create_transactions(ynab_transactions)
+        # Claim the transfers the bank feed already imported instead of adding a second pair.
+        self.update_transactions(plan.updates())
+
+        result = self.create_transactions(plan.to_create)
 
         created = len(result.get("transactions", []))
         duplicates = len(result.get("duplicate_import_ids", []))
 
-        return created, duplicates
+        return created, duplicates, len(plan.links)
+
+
+IMPORT_PREFIX = "FZYN:"
+MEMO_LIMIT = 200  # the limit this sync already uses for memos it writes
+# How far apart the bank feed and FamZoo may date the same transfer (FamZoo posts a day or more later).
+MATCH_WINDOW_DAYS = 5
+
+
+@dataclass
+class TransferLink:
+    """A FamZoo transfer that YNAB already holds, so it is claimed rather than created."""
+
+    new: YNABTransaction
+    existing: dict
+
+    def update(self) -> Optional[dict]:
+        """The PATCH body that marks the existing row cleared and tags it with the FamZoo import_id.
+
+        YNAB doesn't let the API set import_id on an existing transaction, so the
+        tag goes in the memo. It stops a later FamZoo transfer from claiming the
+        same row and keeps re-runs from claiming it twice.
+        """
+        memo = self.existing.get("memo") or ""
+        if self.new.import_id in memo:
+            return None  # linked on an earlier run
+        tag = f"[{self.new.import_id}]"
+        body = {"id": self.existing["id"]}
+        if memo:
+            # Never shorten the user's own note; leave it untagged if the tag won't fit.
+            if len(memo) + 1 + len(tag) <= MEMO_LIMIT:
+                body["memo"] = f"{memo} {tag}"
+        else:
+            base = (self.new.memo or "")[: MEMO_LIMIT - len(tag) - 1].rstrip()
+            body["memo"] = f"{base} {tag}".strip()
+        if self.existing.get("cleared") == "uncleared":
+            body["cleared"] = "cleared"  # FamZoo has confirmed it; never downgrade a reconciled row
+        return body if len(body) > 1 else None
+
+    @property
+    def untagged(self) -> bool:
+        """True when the memo is too full to hold the link tag (the row is still claimed)."""
+        memo = self.existing.get("memo") or ""
+        return bool(memo) and self.new.import_id not in memo and len(memo) + 2 + len(self.new.import_id) + 2 > MEMO_LIMIT
+
+
+@dataclass
+class SyncPlan:
+    to_create: list[YNABTransaction]
+    links: list[TransferLink] = field(default_factory=list)
+
+    def updates(self) -> list[dict]:
+        return [u for u in (link.update() for link in self.links) if u]
+
+
+def _is_famzoo_linked(existing: dict) -> bool:
+    return (existing.get("import_id") or "").startswith(IMPORT_PREFIX) or IMPORT_PREFIX in (existing.get("memo") or "")
+
+
+def plan_transfer_links(
+    ynab_transactions: list[YNABTransaction], existing: list[dict], transfer_account_id: Optional[str]
+) -> SyncPlan:
+    """Pair FamZoo transfers with transfers already in the FamZoo account.
+
+    When the bank feed on the checking account imports a move first, YNAB adds
+    the FamZoo side itself. FamZoo's own record of the move (for example
+    "Direct Deposit: SCHWAB BANK") arrives days later and must claim that row,
+    not create a second transfer pair.
+
+    A row qualifies when it is a live transfer with the same account, the same
+    amount and sign, dated within MATCH_WINDOW_DAYS, and no FamZoo import is
+    tied to it yet. Each row is claimed at most once. The pairing links as
+    many transfers as possible and, among those pairings, keeps dates closest,
+    so equal transfers a few days apart never strand one another.
+    """
+    live = [e for e in existing if not e.get("deleted")]
+    present_ids = {e.get("import_id") for e in live if e.get("import_id")}
+    links, linked = [], set()
+    pending = []
+    for tx in ynab_transactions:
+        if not tx.is_transfer or not transfer_account_id or tx.import_id in present_ids:
+            continue  # not a transfer, or YNAB's import_id dedup already covers it
+        already = next((e for e in live if tx.import_id in (e.get("memo") or "")), None)
+        if already:
+            links.append(TransferLink(tx, already))  # claimed on an earlier run
+            linked.add(id(tx))
+            live = [e for e in live if e["id"] != already["id"]]
+        else:
+            pending.append(tx)
+
+    candidates = []  # (pending index, live index, day gap)
+    for i, tx in enumerate(pending):
+        tx_date = date.fromisoformat(tx.date)
+        for j, e in enumerate(live):
+            if (e.get("transfer_account_id") != transfer_account_id or e.get("amount") != tx.amount
+                    or _is_famzoo_linked(e)):
+                continue
+            gap = abs((date.fromisoformat(e["date"]) - tx_date).days)
+            if gap <= MATCH_WINDOW_DAYS:
+                candidates.append((i, j, gap))
+
+    for i, j in _match(candidates):
+        links.append(TransferLink(pending[i], live[j]))
+        linked.add(id(pending[i]))
+
+    to_create = [tx for tx in ynab_transactions if id(tx) not in linked]
+    return SyncPlan(to_create=to_create, links=links)
+
+
+def _match(edges: list[tuple[int, int, int]]) -> list[tuple[int, int]]:
+    """Maximum matching of minimum total gap over (left, right, gap) edges.
+
+    Successive shortest augmenting paths: each round adds one pair along the
+    cheapest path, so the result links the most transfers and, among those
+    choices, the smallest total date gap. Inputs are a handful of rows.
+    """
+    adj: dict[int, list[tuple[int, int]]] = {}
+    for left, right, gap in edges:
+        adj.setdefault(left, []).append((right, gap))
+    match_left: dict[int, int] = {}
+    match_right: dict[int, int] = {}
+    cost = {(left, right): gap for left, right, gap in edges}
+    while True:
+        # Bellman-Ford from every free left node over the residual graph.
+        dist = {("L", left): 0 for left in adj if left not in match_left}
+        prev: dict = {}
+        changed = True
+        while changed:
+            changed = False
+            for (side, node), d in list(dist.items()):
+                if side == "L":
+                    steps = [(("R", r), d + g) for r, g in adj[node] if match_left.get(node) != r]
+                elif node in match_right:
+                    left = match_right[node]
+                    steps = [(("L", left), d - cost[(left, node)])]
+                else:
+                    steps = []
+                for target, nd in steps:
+                    if nd < dist.get(target, float("inf")):
+                        dist[target], prev[target] = nd, (side, node)
+                        changed = True
+        free = [(d, node) for (side, node), d in dist.items() if side == "R" and node not in match_right]
+        if not free:
+            break
+        _, right = min(free)
+        # Flip the path back to its free start: each R takes the L before it,
+        # and that L's old partner becomes the next R to reassign.
+        while True:
+            left = prev[("R", right)][1]
+            match_left[left], match_right[right] = right, left
+            if ("L", left) not in prev:
+                break
+            right = prev[("L", left)][1]
+    return sorted(match_left.items())
